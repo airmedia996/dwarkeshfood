@@ -1,0 +1,119 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String
+  password  String
+  role      String   @default("customer") // 'customer' | 'admin' | 'delivery'
+  address   String?
+  city      String?
+  zipCode   String?
+  latitude  Float?
+  longitude Float?
+  profileImage String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders           Order[]
+  payments         Payment[]
+  deliveryTransfers DeliveryTracking[] @relation("DeliveryPerson")
+  assignedOrders   Order[] @relation("DeliveryPerson")
+}
+
+model MenuItem {
+  id            String   @id @default(uuid())
+  name          String
+  category      String // 'snacks' | 'curries' | 'desserts' | 'breads'
+  description   String?
+  price         Float
+  image         String // Cloudinary URL
+  rating        Float    @default(0)
+  reviewCount   Int      @default(0)
+  isVegetarian  Boolean  @default(true)
+  spiceLevel    String? // 'mild' | 'medium' | 'hot'
+  preparationTime Int? // minutes
+  availability  Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orderItems OrderItem[]
+}
+
+model Order {
+  id               String   @id @default(uuid())
+  customerId       String
+  customer         User     @relation(fields: [customerId], references: [id])
+  items            OrderItem[]
+  subtotal         Float
+  tax              Float
+  deliveryFee      Float
+  totalAmount      Float
+  status           String   @default("pending") // 'pending' | 'confirmed' | 'preparing' | 'ready' | 'out_for_delivery' | 'delivered' | 'cancelled'
+  paymentMethod    String // 'stripe' | 'momo' | 'cash'
+  paymentStatus    String   @default("pending") // 'pending' | 'completed' | 'failed'
+  deliveryAddress  String
+  deliveryPersonId String?
+  deliveryPerson   User?    @relation(name: "DeliveryPerson", fields: [deliveryPersonId], references: [id])
+  specialInstructions String?
+  rating           Int?
+  review           String?
+  estimatedDeliveryTime DateTime?
+  actualDeliveryTime DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payment          Payment?
+  tracking         DeliveryTracking?
+}
+
+model OrderItem {
+  id         String   @id @default(uuid())
+  orderId    String
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId String
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+  quantity   Int
+  price      Float // price at time of order
+
+  @@unique([orderId, menuItemId])
+}
+
+model Payment {
+  id                      String   @id @default(uuid())
+  orderId                 String   @unique
+  order                   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId                  String
+  user                    User     @relation(fields: [userId], references: [id])
+  amount                  Float
+  currency                String   @default("USD")
+  paymentMethod           String // 'stripe' | 'momo' | 'cash'
+  transactionId           String?
+  status                  String   @default("pending") // 'pending' | 'completed' | 'failed' | 'refunded'
+  paymentGatewayResponse  Json?
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model DeliveryTracking {
+  id                String   @id @default(uuid())
+  orderId           String   @unique
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryPersonId  String?
+  deliveryPerson    User?    @relation(name: "DeliveryPerson", fields: [deliveryPersonId], references: [id])
+  currentLat        Float?
+  currentLng        Float?
+  deliveryRoute     Json? // Array of {lat, lng, timestamp}
+  estimatedArrival  DateTime?
+  status            String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}

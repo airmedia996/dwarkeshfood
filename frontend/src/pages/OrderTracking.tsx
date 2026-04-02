@@ -1,25 +1,40 @@
 import { useEffect, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import { ordersAPI } from '../services/api'
 import { io } from 'socket.io-client'
+import { formatPriceShort } from '../utils/currency'
 
 const OrderTracking: React.FC = () => {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [order, setOrder] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
 
   useEffect(() => {
     const fetchOrder = async () => {
       try {
         const response = await ordersAPI.getOrder(id!)
         setOrder(response.data)
-        
-        const socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000')
+
+        const socket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+          reconnection: true,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          reconnectionAttempts: 5,
+        })
+
         socket.emit('track-order', id)
+
         socket.on('order:updated', (data) => {
           setOrder((prev: any) => ({ ...prev, ...data }))
         })
-        
+
+        socket.on('delivery:location', (data) => {
+          setCurrentLocation({ lat: data.latitude, lng: data.longitude })
+        })
+
         return () => socket.close()
       } catch (error) {
         console.error('Failed to fetch order')
@@ -30,45 +45,243 @@ const OrderTracking: React.FC = () => {
     fetchOrder()
   }, [id])
 
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case 'pending':
+        return '⏳'
+      case 'confirmed':
+        return '✓'
+      case 'preparing':
+        return '👨‍🍳'
+      case 'ready':
+        return '📦'
+      case 'out_for_delivery':
+        return '🚗'
+      case 'delivered':
+        return '🎉'
+      default:
+        return '❓'
+    }
+  }
+
+  const statusSteps = [
+    { status: 'pending', label: 'Order Placed', icon: '📝' },
+    { status: 'confirmed', label: 'Confirmed', icon: '✓' },
+    { status: 'preparing', label: 'Preparing', icon: '👨‍🍳' },
+    { status: 'ready', label: 'Ready for Delivery', icon: '📦' },
+    { status: 'out_for_delivery', label: 'Out for Delivery', icon: '🚗' },
+    { status: 'delivered', label: 'Delivered', icon: '🎉' },
+  ]
+
+  const currentStatusIndex = statusSteps.findIndex((step) => step.status === order?.status)
+  const isDelivered = order?.status === 'delivered'
+
   if (isLoading || !order) {
-    return <div className="min-h-screen bg-black py-12 text-center text-gray-400">Loading...</div>
+    return (
+      <div className="min-h-screen bg-black py-12 flex items-center justify-center">
+        <motion.div
+          animate={{ opacity: [0.5, 1, 0.5] }}
+          transition={{ duration: 1.5, repeat: Infinity }}
+          className="text-center text-gray-400"
+        >
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gold mb-4 mx-auto"></div>
+          <p>Loading order details...</p>
+        </motion.div>
+      </div>
+    )
   }
 
   return (
     <div className="min-h-screen bg-black py-12">
-      <div className="max-w-2xl mx-auto px-4">
-        <h1 className="text-4xl font-bold text-gold mb-8">Order Tracking</h1>
-        <div className="bg-dark-coffee border border-coffee rounded-lg p-8">
-          <div className="mb-8">
-            <h2 className="text-white font-bold mb-4">Order Status: <span className="text-gold">{order.status}</span></h2>
-            <div className="space-y-4">
-              {['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered'].map((status) => (
-                <div
-                  key={status}
-                  className={`flex items-center ${
-                    ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered']
-                      .indexOf(status) <=
-                    ['pending', 'confirmed', 'preparing', 'ready', 'out_for_delivery', 'delivered']
-                      .indexOf(order.status)
-                      ? 'opacity-100'
-                      : 'opacity-50'
-                  }`}
-                >
-                  <div className="w-8 h-8 rounded-full bg-gold flex items-center justify-center mr-4">
-                    ✓
-                  </div>
-                  <span className="text-white capitalize">{status.replace(/_/g, ' ')}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+      <div className="max-w-5xl mx-auto px-4">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <button
+            onClick={() => navigate(-1)}
+            className="mb-4 flex items-center gap-2 text-gold hover:text-yellow-500 transition-colors"
+          >
+            ← Back
+          </button>
+          <h1 className="text-5xl font-bold text-gold mb-2">📍 Order Tracking</h1>
+          <p className="text-gray-400">Order #{order.id.substring(0, 8).toUpperCase()}</p>
+          <div className="w-20 h-1 bg-gradient-to-r from-gold to-coffee rounded mt-4"></div>
+        </motion.div>
 
-          <div className="bg-black border border-coffee rounded p-4">
-            <h3 className="text-gold font-bold mb-4">Order Details</h3>
-            <p className="text-gray-400 mb-2">Address: {order.deliveryAddress}</p>
-            <p className="text-gray-400 mb-2">Total: ₹{order.totalAmount}</p>
-            <p className="text-gray-400">Payment Method: {order.paymentMethod}</p>
-          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Status Timeline */}
+          <motion.div
+            initial={{ opacity: 0, x: -50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.1 }}
+            className="lg:col-span-2"
+          >
+            <div className="bg-dark-coffee border border-coffee rounded-lg p-8">
+              <h2 className="text-2xl font-bold text-gold mb-8">Order Status Timeline</h2>
+
+              {/* Status Steps */}
+              <div className="relative">
+                {/* Timeline Line */}
+                <div className="absolute left-6 top-0 bottom-0 w-1 bg-gradient-to-b from-gold to-coffee"></div>
+
+                {/* Steps */}
+                <div className="space-y-8">
+                  {statusSteps.map((step, index) => {
+                    const isCompleted = index <= currentStatusIndex
+                    const isCurrent = index === currentStatusIndex
+
+                    return (
+                      <motion.div
+                        key={step.status}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: index * 0.1 }}
+                        className="relative pl-24"
+                      >
+                        {/* Circle Icon */}
+                        <motion.div
+                          animate={isCurrent ? { scale: [1, 1.2, 1] } : {}}
+                          transition={{ duration: 2, repeat: Infinity }}
+                          className={`absolute left-0 w-14 h-14 rounded-full flex items-center justify-center text-2xl border-4 ${
+                            isCompleted
+                              ? 'bg-gold border-gold text-black'
+                              : 'bg-black border-coffee text-gray-400'
+                          }`}
+                        >
+                          {step.icon}
+                        </motion.div>
+
+                        {/* Content */}
+                        <div className={isCurrent ? 'bg-gold bg-opacity-10 p-4 rounded border border-gold' : ''}>
+                          <h3 className={`font-bold text-lg ${isCompleted ? 'text-white' : 'text-gray-400'}`}>
+                            {step.label}
+                          </h3>
+                          {isCurrent && <p className="text-gold text-sm mt-2">🔄 In Progress...</p>}
+                          {isCompleted && index < currentStatusIndex && (
+                            <p className="text-green-400 text-sm mt-2">✓ Completed</p>
+                          )}
+                        </div>
+                      </motion.div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Live Location Map */}
+            {order.status === 'out_for_delivery' && currentLocation && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="bg-dark-coffee border border-coffee rounded-lg p-6 mt-6"
+              >
+                <h3 className="text-xl font-bold text-gold mb-4">🚗 Delivery Location</h3>
+                <div className="bg-black rounded-lg p-4 h-64 flex items-center justify-center">
+                  {/* Simple coordinate display */}
+                  <div className="text-center">
+                    <p className="text-gray-400 text-sm mb-2">Delivery Agent Location</p>
+                    <p className="text-white font-bold text-2xl">
+                      📍 {currentLocation.lat.toFixed(4)}, {currentLocation.lng.toFixed(4)}
+                    </p>
+                    <p className="text-gray-400 text-xs mt-4">
+                      On the way to your location... {Math.floor(Math.random() * 10 + 5)} mins away
+                    </p>
+                    {/* Animated direction indicator */}
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+                      className="text-3xl mt-4"
+                    >
+                      🧭
+                    </motion.div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </motion.div>
+
+          {/* Order Summary Sidebar */}
+          <motion.div
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 }}
+            className="space-y-6"
+          >
+            {/* Status Card */}
+            <div className={`rounded-lg p-6 ${isDelivered ? 'bg-gradient-to-br from-green-600 to-green-800' : 'bg-gradient-to-br from-orange-600 to-orange-800'}`}>
+              <p className="text-white text-sm uppercase mb-2">Current Status</p>
+              <motion.p
+                animate={{ scale: [1, 1.05, 1] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="text-2xl font-bold text-white"
+              >
+                {getStatusIcon(order.status)} {order.status.replace(/_/g, ' ')}
+              </motion.p>
+              {!isDelivered && (
+                <p className="text-white text-xs mt-2 opacity-80">
+                  Expected: {new Date(order.estimatedDeliveryTime || new Date()).toLocaleTimeString()}
+                </p>
+              )}
+            </div>
+
+            {/* Order Info */}
+            <div className="bg-dark-coffee border border-coffee rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gold mb-4">📋 Order Details</h3>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="text-gray-400">Order ID</p>
+                  <p className="text-white font-semibold">#{order.id.substring(0, 8).toUpperCase()}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">Items</p>
+                  <p className="text-white font-semibold">{order.items?.length || 0} items</p>
+                </div>
+                <div className="border-t border-coffee pt-3">
+                  <p className="text-gray-400">Delivery Address</p>
+                  <p className="text-white font-semibold">📍 {order.deliveryAddress}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Payment Info */}
+            <div className="bg-dark-coffee border border-coffee rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gold mb-4">💳 Payment Details</h3>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <p className="text-gray-400">Method</p>
+                  <p className="text-white font-semibold capitalize">{order.paymentMethod}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">Amount</p>
+                  <p className="text-gold font-bold text-xl">{formatPriceShort(order.totalAmount)}</p>
+                </div>
+                <div className="border-t border-coffee pt-3">
+                  <p className="text-gray-400">Status</p>
+                  <p className={`font-semibold ${order.paymentStatus === 'completed' ? 'text-green-400' : 'text-yellow-400'}`}>
+                    {order.paymentStatus === 'completed' ? '✓ Paid' : 'Pending'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Support */}
+            <div className="bg-dark-coffee border border-coffee rounded-lg p-6">
+              <h3 className="text-lg font-bold text-gold mb-4">📞 Need Help?</h3>
+              <p className="text-gray-300 text-sm mb-4">
+                Contact us for any issues with your order
+              </p>
+              <a
+                href="tel:0571679999"
+                className="block w-full text-center bg-gold text-black py-2 rounded font-bold hover:bg-yellow-500 transition-colors"
+              >
+                Call Support
+              </a>
+            </div>
+          </motion.div>
         </div>
       </div>
     </div>

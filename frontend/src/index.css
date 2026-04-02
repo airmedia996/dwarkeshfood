@@ -58,3 +58,32 @@ body {
 .animate-fade-in {
   animation: fadeIn 0.3s ease-out;
 }
+
+/* Input and Textarea Styling */
+textarea,
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="password"] {
+  color: #ffffff;
+  background-color: #000000;
+}
+
+textarea::placeholder,
+input[type="text"]::placeholder,
+input[type="email"]::placeholder,
+input[type="tel"]::placeholder,
+input[type="password"]::placeholder {
+  color: #9ca3af;
+  opacity: 1;
+}
+
+textarea:focus,
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="tel"]:focus,
+input[type="password"]:focus {
+  border-color: #D4A574;
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(212, 165, 116, 0.1);
+}

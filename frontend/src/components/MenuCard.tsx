@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux'
 import { addToCart } from '../store/slices/cartSlice'
 import { RootState } from '../store/index'
 import { motion } from 'framer-motion'
+import { formatPriceShort } from '../utils/currency'
 
 interface MenuItem {
   id: string
@@ -51,22 +52,45 @@ const MenuCard: React.FC<MenuCardProps> = ({ item }) => {
     }, 600)
   }
 
+  const cardVariants = {
+    hidden: { opacity: 0, y: 30, scale: 0.9 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      scale: 1,
+      transition: { type: 'spring', stiffness: 100, damping: 15 },
+    },
+    hover: {
+      y: -8,
+      transition: { type: 'spring', stiffness: 300, damping: 20 },
+    },
+  }
+
   return (
     <motion.div
-      whileHover={{ y: -5 }}
+      variants={cardVariants}
+      initial="hidden"
+      animate="visible"
+      whileHover="hover"
       className="bg-dark-coffee border border-coffee rounded-lg overflow-hidden hover:border-gold transition-colors"
     >
       {/* Image */}
       <div className="relative h-48 overflow-hidden bg-black">
-        <img
+        <motion.img
+          whileHover={{ scale: 1.15 }}
+          transition={{ duration: 0.4 }}
           src={item.image}
           alt={item.name}
-          className="w-full h-full object-cover hover:scale-110 transition-transform duration-300"
+          className="w-full h-full object-cover"
         />
         {!item.availability && (
-          <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center"
+          >
             <span className="text-gold font-bold">Out of Stock</span>
-          </div>
+          </motion.div>
         )}
       </div>
 
@@ -96,7 +120,7 @@ const MenuCard: React.FC<MenuCardProps> = ({ item }) => {
 
         {/* Price */}
         <div className="flex justify-between items-center mb-4">
-          <span className="text-2xl font-bold text-gold">₹{item.price}</span>
+          <span className="text-2xl font-bold text-gold">{formatPriceShort(item.price)}</span>
         </div>
 
         {/* Quantity and Add to Cart */}

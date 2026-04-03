@@ -21,6 +21,19 @@ const Checkout: React.FC = () => {
   })
   const [isLoading, setIsLoading] = useState(false)
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: { staggerChildren: 0.08, delayChildren: 0.1 },
+    },
+  }
+
+  const summaryItemVariants = {
+    hidden: { opacity: 0, x: -10 },
+    visible: { opacity: 1, x: 0 },
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
@@ -152,21 +165,31 @@ const Checkout: React.FC = () => {
           <motion.div
             initial={{ opacity: 0, x: 50 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.3 }}
+            transition={{ delay: 0.3, type: 'spring', stiffness: 50 }}
             className="lg:col-span-1"
           >
             <div className="bg-dark-coffee border border-coffee rounded-lg p-6 sticky top-20">
-              <h2 className="text-2xl font-bold text-gold mb-6">📋 Order Summary</h2>
+              <motion.h2 
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-2xl font-bold text-gold mb-6"
+              >
+                📋 Order Summary
+              </motion.h2>
 
               {/* Order Items */}
-              <div className="mb-6 max-h-64 overflow-y-auto">
+              <motion.div 
+                variants={containerVariants}
+                initial="hidden"
+                animate="visible"
+                className="mb-6 max-h-64 overflow-y-auto"
+              >
                 <h3 className="text-white font-semibold mb-3">Items ({items.length}):</h3>
                 <div className="space-y-2">
                   {items.map((item) => (
                     <motion.div
                       key={item.menuItemId}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
+                      variants={summaryItemVariants}
                       className="flex justify-between text-gray-300 text-sm"
                     >
                       <span>
@@ -176,7 +199,7 @@ const Checkout: React.FC = () => {
                     </motion.div>
                   ))}
                 </div>
-              </div>
+              </motion.div>
 
               {/* Price Breakdown */}
               <div className="space-y-3 mb-6 border-t border-b border-coffee py-6">

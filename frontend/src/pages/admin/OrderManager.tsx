@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ordersAPI } from '../../services/api'
+import { ordersAPI, adminAPI } from '../../services/api'
 
 const OrderManager: React.FC = () => {
   const [orders, setOrders] = useState<any[]>([])
@@ -23,7 +23,7 @@ const OrderManager: React.FC = () => {
 
   const updateOrderStatus = async (orderId: string, newStatus: string) => {
     try {
-      await ordersAPI.updateOrderStatus(orderId, newStatus)
+      await adminAPI.updateOrderStatus(orderId, newStatus)
       setOrders(orders.map((order) =>
         order.id === orderId ? { ...order, status: newStatus } : order
       ))

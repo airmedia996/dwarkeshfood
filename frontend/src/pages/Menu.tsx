@@ -14,6 +14,15 @@ const Menu: React.FC = () => {
     (state: RootState) => state.menu
   )
   const [categories, setCategories] = useState<string[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   useEffect(() => {
     const fetchMenu = async () => {
@@ -21,6 +30,7 @@ const Menu: React.FC = () => {
         dispatch(setLoading(true))
         const response = await menuAPI.getMenuItems({
           category: selectedCategory || undefined,
+          search: debouncedSearch || undefined,
         })
         dispatch(setMenuItems(response.data))
       } catch (err: any) {
@@ -41,19 +51,24 @@ const Menu: React.FC = () => {
 
     fetchMenu()
     fetchCategories()
-  }, [dispatch, selectedCategory])
+  }, [dispatch, selectedCategory, debouncedSearch])
 
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
-      transition: { staggerChildren: 0.1, delayChildren: 0.2 },
+      transition: { staggerChildren: 0.08, delayChildren: 0.1 },
     },
   }
 
   const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: { opacity: 1, y: 0, transition: { duration: 0.5 } },
+    hidden: { opacity: 0, y: 30, scale: 0.9 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      scale: 1,
+      transition: { type: 'spring', stiffness: 100, damping: 15 },
+    },
   }
 
   return (
@@ -77,25 +92,59 @@ const Menu: React.FC = () => {
           <div className="w-24 h-1 bg-gradient-to-r from-gold to-coffee rounded mt-4"></div>
         </motion.div>
 
+        {/* Search Bar */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="mb-8"
+        >
+          <div className="relative max-w-xl mx-auto">
+            <input
+              type="text"
+              placeholder="Search for delicious food..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-6 py-4 pl-12 bg-dark-coffee border-2 border-coffee rounded-xl text-white placeholder-gray-400 focus:border-gold focus:outline-none transition-colors text-lg"
+            />
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-2xl">🔍</span>
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <p className="text-center text-gray-400 mt-3">
+              Searching for: <span className="text-gold font-semibold">"{searchQuery}"</span>
+            </p>
+          )}
+        </motion.div>
+
         {/* Categories */}
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2, duration: 0.6 }}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2, duration: 0.5 }}
           className="flex flex-wrap gap-3 mb-10"
         >
-          <button
+          <motion.button
             onClick={() => dispatch(setSelectedCategory(null))}
             className={`px-6 py-3 rounded-lg font-semibold transition-all duration-300 ${
               !selectedCategory
                 ? 'bg-gold text-black shadow-lg scale-105'
                 : 'bg-coffee text-white hover:bg-gold hover:text-black'
             }`}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
           >
             All Items
-          </button>
+          </motion.button>
           {categories.map((cat) => (
-            <button
+            <motion.button
               key={cat}
               onClick={() => dispatch(setSelectedCategory(cat))}
               className={`px-6 py-3 rounded-lg font-semibold capitalize transition-all duration-300 ${
@@ -103,9 +152,11 @@ const Menu: React.FC = () => {
                   ? 'bg-gold text-black shadow-lg scale-105'
                   : 'bg-coffee text-white hover:bg-gold hover:text-black'
               }`}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
             >
               {cat}
-            </button>
+            </motion.button>
           ))}
         </motion.div>
 

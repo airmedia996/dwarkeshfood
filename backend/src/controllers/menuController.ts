@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 const menuItemSchema = z.object({
   name: z.string().min(2),
-  category: z.enum(['snacks', 'curries', 'desserts', 'breads']),
+  category: z.enum(['snacks', 'curries', 'desserts', 'breads', 'beverages']),
   description: z.string().optional(),
   price: z.number().positive(),
   image: z.string().url(),

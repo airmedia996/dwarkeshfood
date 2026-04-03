@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma, io } from '../index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthRequest } from '../middleware/auth.js';
+import { sendOrderNotification } from '../services/notificationService.js';
 
 export const getDashboard = async (req: AuthRequest, res: Response) => {
   try {
@@ -108,6 +109,20 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
       data: { status },
       include: { customer: true }
     });
+
+    const statusNotificationMap: Record<string, string> = {
+      confirmed: 'order_confirmed',
+      preparing: 'preparing',
+      ready: 'ready_for_pickup',
+      out_for_delivery: 'out_for_delivery',
+      delivered: 'delivered',
+      cancelled: 'cancelled'
+    };
+
+    const notificationType = statusNotificationMap[status];
+    if (notificationType && order.customerId) {
+      await sendOrderNotification(id, order.customerId, notificationType as any);
+    }
 
     // Emit real-time update
     io.to(`order-${id}`).emit('order:updated', {

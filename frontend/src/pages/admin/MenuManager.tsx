@@ -114,6 +114,7 @@ const MenuManager: React.FC = () => {
               <option value="curries">Curries</option>
               <option value="desserts">Desserts</option>
               <option value="breads">Breads</option>
+              <option value="beverages">Beverages</option>
             </select>
             <input
               type="number"

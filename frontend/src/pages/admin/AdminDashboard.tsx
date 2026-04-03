@@ -3,8 +3,9 @@ import { motion } from 'framer-motion'
 import { adminAPI } from '../../services/api'
 import MenuManager from './MenuManager'
 import OrderManager from './OrderManager'
+import ChatManager from './ChatManager'
 
-type AdminTab = 'dashboard' | 'menu' | 'orders'
+type AdminTab = 'dashboard' | 'menu' | 'orders' | 'chat'
 
 const AdminDashboard: React.FC = () => {
   const [dashboard, setDashboard] = useState<any>(null)
@@ -29,6 +30,7 @@ const AdminDashboard: React.FC = () => {
     { id: 'dashboard' as AdminTab, label: '📊 Dashboard', icon: '📊' },
     { id: 'menu' as AdminTab, label: '🍽️ Menu Manager', icon: '🍽️' },
     { id: 'orders' as AdminTab, label: '📦 Orders', icon: '📦' },
+    { id: 'chat' as AdminTab, label: '💬 Support Chat', icon: '💬' },
   ]
 
   const StatCard = ({ icon, label, value, color }: any) => (
@@ -166,6 +168,9 @@ const AdminDashboard: React.FC = () => {
 
         {/* Orders Manager View */}
         {activeTab === 'orders' && <OrderManager />}
+
+        {/* Chat Manager View */}
+        {activeTab === 'chat' && <ChatManager />}
       </div>
     </div>
   )

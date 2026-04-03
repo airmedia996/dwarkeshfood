@@ -27,6 +27,8 @@ model User {
   payments         Payment[]
   deliveryTransfers DeliveryTracking[] @relation("DeliveryPerson")
   assignedOrders   Order[] @relation("DeliveryPerson")
+  notifications    Notification[]
+  addresses        Address[]
 }
 
 model MenuItem {
@@ -116,4 +118,65 @@ model DeliveryTracking {
   status            String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // 'order_placed' | 'order_confirmed' | 'preparing' | 'ready_for_pickup' | 'out_for_delivery' | 'delivered' | 'cancelled' | 'payment_received' | 'payment_failed'
+  title     String
+  message   String
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id])
+  data      Json?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model Address {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label       String   // e.g., 'Home', 'Work', 'Other'
+  fullAddress String
+  city        String?
+  zipCode     String?
+  latitude    Float?
+  longitude   Float?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model ChatConversation {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  adminId     String?
+  status      String   @default("active") // 'active' | 'closed'
+  lastMessage String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  messages    ChatMessage[]
+  @@index([userId])
+}
+
+model ChatMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  conversation   ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  senderType     String   // 'user' | 'admin'
+  content        String
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId])
 }

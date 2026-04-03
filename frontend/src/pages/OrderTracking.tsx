@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { ordersAPI } from '../services/api'
+import { useDispatch } from 'react-redux'
+import { addToCart } from '../store/slices/cartSlice'
 import { io } from 'socket.io-client'
 import { formatPriceShort } from '../utils/currency'
 
 const OrderTracking: React.FC = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const dispatch = useDispatch()
   const [order, setOrder] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null)
+  const [showRating, setShowRating] = useState(false)
+  const [rating, setRating] = useState(0)
+  const [review, setReview] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
     const fetchOrder = async () => {
@@ -221,10 +228,16 @@ const OrderTracking: React.FC = () => {
               >
                 {getStatusIcon(order.status)} {order.status.replace(/_/g, ' ')}
               </motion.p>
-              {!isDelivered && (
-                <p className="text-white text-xs mt-2 opacity-80">
-                  Expected: {new Date(order.estimatedDeliveryTime || new Date()).toLocaleTimeString()}
-                </p>
+              {!isDelivered && order.estimatedDeliveryTime && (
+                <div className="mt-3 pt-3 border-t border-white/20">
+                  <p className="text-white text-xs opacity-80">Estimated Delivery</p>
+                  <p className="text-white font-bold text-lg">
+                    {new Date(order.estimatedDeliveryTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  <p className="text-white text-xs opacity-70 mt-1">
+                    {Math.max(0, Math.ceil((new Date(order.estimatedDeliveryTime).getTime() - Date.now()) / 60000))} mins remaining
+                  </p>
+                </div>
               )}
             </div>
 
@@ -268,6 +281,35 @@ const OrderTracking: React.FC = () => {
               </div>
             </div>
 
+            {/* Cancel Order */}
+            {['pending', 'confirmed'].includes(order.status) && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-dark-coffee border border-red-800 rounded-lg p-6"
+              >
+                <h3 className="text-lg font-bold text-red-400 mb-4">❌ Cancel Order</h3>
+                <p className="text-gray-300 text-sm mb-4">
+                  Orders can be cancelled while in pending or confirmed status.
+                </p>
+                <button
+                  onClick={async () => {
+                    if (!confirm('Are you sure you want to cancel this order?')) return
+                    try {
+                      const response = await ordersAPI.cancelOrder(order.id)
+                      setOrder(response.data)
+                      alert(response.data.refundMessage || 'Order cancelled')
+                    } catch (error) {
+                      console.error('Failed to cancel order')
+                    }
+                  }}
+                  className="w-full bg-red-600 text-white py-2 rounded font-bold hover:bg-red-700 transition-colors"
+                >
+                  Cancel Order
+                </button>
+              </motion.div>
+            )}
+
             {/* Support */}
             <div className="bg-dark-coffee border border-coffee rounded-lg p-6">
               <h3 className="text-lg font-bold text-gold mb-4">📞 Need Help?</h3>
@@ -281,6 +323,129 @@ const OrderTracking: React.FC = () => {
                 Call Support
               </a>
             </div>
+
+            {/* Reorder Button */}
+            {order.status === 'delivered' && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-dark-coffee border border-coffee rounded-lg p-6"
+              >
+                <h3 className="text-lg font-bold text-gold mb-4">🔄 Order Again</h3>
+                <p className="text-gray-300 text-sm mb-4">
+                  Reorder the same items from this order
+                </p>
+                <button
+                  onClick={() => {
+                    order.items.forEach((item: any) => {
+                      dispatch(addToCart({
+                        menuItemId: item.menuItemId,
+                        name: item.menuItem?.name || 'Item',
+                        price: item.price,
+                        image: item.menuItem?.image || '',
+                        quantity: item.quantity
+                      }))
+                    })
+                    navigate('/cart')
+                  }}
+                  className="w-full bg-gold text-black py-2 rounded font-bold hover:bg-yellow-500 transition-colors"
+                >
+                  Add to Cart
+                </button>
+              </motion.div>
+            )}
+
+            {/* Rate Order */}
+            {order.status === 'delivered' && !order.rating && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-dark-coffee border border-coffee rounded-lg p-6"
+              >
+                <h3 className="text-lg font-bold text-gold mb-4">⭐ Rate Your Order</h3>
+                {!showRating ? (
+                  <button
+                    onClick={() => setShowRating(true)}
+                    className="w-full bg-gold text-black py-2 rounded font-bold hover:bg-yellow-500 transition-colors"
+                  >
+                    Leave a Review
+                  </button>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex justify-center gap-2">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <button
+                          key={star}
+                          onClick={() => setRating(star)}
+                          className="text-3xl transition-transform hover:scale-110"
+                        >
+                          {star <= rating ? '⭐' : '☆'}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      value={review}
+                      onChange={(e) => setReview(e.target.value)}
+                      placeholder="Share your experience..."
+                      className="w-full bg-black text-white border border-coffee rounded p-3 text-sm resize-none"
+                      rows={3}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setShowRating(false)
+                          setRating(0)
+                          setReview('')
+                        }}
+                        className="flex-1 py-2 text-gray-400 hover:text-white transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (rating === 0) return
+                          setIsSubmitting(true)
+                          try {
+                            await ordersAPI.rateOrder(order.id, { rating, review })
+                            setOrder((prev: any) => ({ ...prev, rating, review }))
+                            setShowRating(false)
+                          } catch (error) {
+                            console.error('Failed to submit rating')
+                          } finally {
+                            setIsSubmitting(false)
+                          }
+                        }}
+                        disabled={rating === 0 || isSubmitting}
+                        className="flex-1 bg-gold text-black py-2 rounded font-bold hover:bg-yellow-500 transition-colors disabled:opacity-50"
+                      >
+                        {isSubmitting ? 'Submitting...' : 'Submit'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* Show existing rating */}
+            {order.status === 'delivered' && order.rating && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-dark-coffee border border-coffee rounded-lg p-6"
+              >
+                <h3 className="text-lg font-bold text-gold mb-4">⭐ Your Rating</h3>
+                <div className="flex gap-1 mb-3">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span key={star} className="text-2xl">
+                      {star <= order.rating ? '⭐' : '☆'}
+                    </span>
+                  ))}
+                </div>
+                {order.review && (
+                  <p className="text-gray-300 text-sm italic">"{order.review}"</p>
+                )}
+              </motion.div>
+            )}
           </motion.div>
         </div>
       </div>

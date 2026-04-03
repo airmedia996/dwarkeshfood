@@ -11,6 +11,8 @@ import orderRoutes from './routes/orders.js';
 import paymentRoutes from './routes/payments.js';
 import userRoutes from './routes/users.js';
 import adminRoutes from './routes/admin.js';
+import notificationRoutes from './routes/notifications.js';
+import chatRoutes from './routes/chat.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 dotenv.config();
@@ -43,6 +45,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/chat', chatRoutes);
 
 // 404 handler
 app.use((req: Request, res: Response) => {
@@ -55,6 +59,16 @@ app.use(errorHandler);
 // Socket.io events for real-time tracking
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
+
+  socket.on('join-user', (userId: string) => {
+    socket.join(`user-${userId}`);
+    console.log(`User ${userId} joined notification room`);
+  });
+
+  socket.on('join-chat', (conversationId: string) => {
+    socket.join(`chat-${conversationId}`);
+    console.log(`User joined chat room: ${conversationId}`);
+  });
 
   socket.on('track-order', (orderId: string) => {
     socket.join(`order-${orderId}`);

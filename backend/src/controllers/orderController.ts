@@ -3,6 +3,9 @@ import { prisma, io } from '../index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthRequest } from '../middleware/auth.js';
 import { z } from 'zod';
+import { sendOrderNotification } from '../services/notificationService.js';
+
+const formatPriceShort = (amount: number) => `₵${amount.toFixed(2)}`;
 
 const createOrderSchema = z.object({
   items: z.array(
@@ -44,6 +47,15 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     const tax = subtotal * 0.05; // 5% tax
     const deliveryFee = subtotal > 500 ? 0 : 50; // Free delivery for orders > 500
     const totalAmount = subtotal + tax + deliveryFee;
+    
+    // Calculate estimated delivery time (30-45 mins based on order size)
+    const prepTime = Math.max(...orderItems.map(o => {
+      const item = menuItems.find(m => m.id === o.menuItemId);
+      return item?.preparationTime || 30;
+    }));
+    const deliveryTime = 15; // 15 mins for delivery
+    const estimatedMinutes = prepTime + deliveryTime;
+    const estimatedDeliveryTime = new Date(Date.now() + estimatedMinutes * 60000);
 
     const order = await prisma.order.create({
       data: {
@@ -56,6 +68,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         deliveryAddress: data.deliveryAddress,
         paymentMethod: data.paymentMethod,
         specialInstructions: data.specialInstructions,
+        estimatedDeliveryTime,
         items: {
           create: orderItems
         },
@@ -81,6 +94,8 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         status: data.paymentMethod === 'cash' ? 'pending' : 'pending'
       }
     });
+
+    await sendOrderNotification(order.id, req.user!.id, 'order_placed');
 
     res.status(201).json(order);
   } catch (error) {
@@ -155,14 +170,39 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
       throw new AppError('Cannot cancel order in this status', 400);
     }
 
+    // Check if payment was made - calculate refund
+    let refundAmount = 0;
+    if (order.paymentStatus === 'completed') {
+      // Full refund if not yet preparing, partial otherwise
+      refundAmount = order.status === 'pending' ? order.totalAmount : order.totalAmount * 0.5;
+    }
+
     const updatedOrder = await prisma.order.update({
       where: { id },
-      data: { status: 'cancelled' }
+      data: { status: 'cancelled' },
+      include: { payment: true }
     });
 
-    io.to(`order-${id}`).emit('order:updated', updatedOrder);
+    // Update payment status if refund applies
+    if (refundAmount > 0 && updatedOrder.payment) {
+      await prisma.payment.update({
+        where: { id: updatedOrder.payment.id },
+        data: { status: 'refunded' as any }
+      });
+    }
 
-    res.json(updatedOrder);
+    io.to(`order-${id}`).emit('order:updated', {
+      ...updatedOrder,
+      refundAmount
+    });
+
+    res.json({
+      ...updatedOrder,
+      refundAmount,
+      refundMessage: refundAmount > 0 
+        ? `Your refund of ${formatPriceShort(refundAmount)} will be processed within 5-7 business days.`
+        : 'No refund applicable for this order.'
+    });
   } catch (error) {
     throw error;
   }

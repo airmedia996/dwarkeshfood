@@ -1,8 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useSelector, useDispatch } from 'react-redux'
 import { RootState } from '../store/index'
 import { logout } from '../store/slices/authSlice'
+import { fetchNotifications, fetchUnreadCount, markAsRead, markAllAsRead, addNotification } from '../store/slices/notificationSlice'
+import { io } from 'socket.io-client'
+import ChatSupport from './ChatSupport'
+import WhatsAppButton from './WhatsAppButton'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -13,11 +17,80 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const dispatch = useDispatch()
   const { user, token } = useSelector((state: RootState) => state.auth)
   const cartItems = useSelector((state: RootState) => state.cart.items)
+  const { notifications, unreadCount } = useSelector((state: RootState) => state.notifications)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const socketRef = useRef<any>(null)
+
+  useEffect(() => {
+    if (token) {
+      dispatch(fetchNotifications())
+      dispatch(fetchUnreadCount())
+    }
+  }, [token, dispatch])
+
+  useEffect(() => {
+    if (!token || !user) return
+    if (socketRef.current) return
+
+    socketRef.current = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000', {
+      reconnection: true,
+      reconnectionDelay: 1000,
+    })
+
+    socketRef.current.emit('join-user', user.id)
+
+    socketRef.current.on('notification', (notification: any) => {
+      dispatch(addNotification(notification))
+    })
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.close()
+        socketRef.current = null
+      }
+    }
+  }, [token, user, dispatch])
 
   const handleLogout = () => {
     dispatch(logout() as any)
     navigate('/')
+  }
+
+  const handleMarkAsRead = (id: string) => {
+    dispatch(markAsRead(id))
+  }
+
+  const handleMarkAllAsRead = () => {
+    dispatch(markAllAsRead())
+  }
+
+  const getNotificationIcon = (type: string) => {
+    switch (type) {
+      case 'order_placed': return '📋'
+      case 'order_confirmed': return '✅'
+      case 'preparing': return '👨‍🍳'
+      case 'ready_for_pickup': return '🍽️'
+      case 'out_for_delivery': return '🚗'
+      case 'delivered': return '🎉'
+      case 'cancelled': return '❌'
+      case 'payment_received': return '💰'
+      case 'payment_failed': return '⚠️'
+      default: return '🔔'
+    }
+  }
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const minutes = Math.floor(diff / 60000)
+    const hours = Math.floor(diff / 3600000)
+    const days = Math.floor(diff / 86400000)
+    if (minutes < 1) return 'Just now'
+    if (minutes < 60) return `${minutes}m ago`
+    if (hours < 24) return `${hours}h ago`
+    return `${days}d ago`
   }
 
   return (
@@ -83,6 +156,76 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
                     </span>
                   )}
                 </Link>
+              )}
+
+              {/* Notifications */}
+              {token && (
+                <div className="relative">
+                  <button
+                    onClick={() => setNotificationOpen(!notificationOpen)}
+                    className="relative text-white hover:text-gold transition-colors"
+                  >
+                    <span className="text-2xl">🔔</span>
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-2 -right-2 bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold">
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {notificationOpen && (
+                    <div className="absolute right-0 mt-2 w-80 bg-dark-coffee border border-coffee rounded-lg shadow-xl z-50 max-h-96 overflow-hidden">
+                      <div className="p-4 border-b border-coffee flex justify-between items-center">
+                        <h3 className="text-gold font-bold">Notifications</h3>
+                        {unreadCount > 0 && (
+                          <button
+                            onClick={handleMarkAllAsRead}
+                            className="text-sm text-gray-400 hover:text-gold"
+                          >
+                            Mark all read
+                          </button>
+                        )}
+                      </div>
+                      <div className="overflow-y-auto max-h-80">
+                        {notifications.length === 0 ? (
+                          <div className="p-4 text-center text-gray-400">
+                            No notifications yet
+                          </div>
+                        ) : (
+                          notifications.slice(0, 10).map((notification) => (
+                            <div
+                              key={notification.id}
+                              className={`p-3 border-b border-coffee hover:bg-black/30 cursor-pointer ${
+                                !notification.isRead ? 'bg-black/50' : ''
+                              }`}
+                              onClick={() => handleMarkAsRead(notification.id)}
+                            >
+                              <div className="flex items-start gap-3">
+                                <span className="text-xl">
+                                  {getNotificationIcon(notification.type)}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-white font-medium text-sm truncate">
+                                    {notification.title}
+                                  </p>
+                                  <p className="text-gray-400 text-xs truncate">
+                                    {notification.message}
+                                  </p>
+                                  <p className="text-gray-500 text-xs mt-1">
+                                    {formatTime(notification.createdAt)}
+                                  </p>
+                                </div>
+                                {!notification.isRead && (
+                                  <div className="w-2 h-2 bg-gold rounded-full mt-2"></div>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* Auth */}
@@ -164,6 +307,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
       {/* Main Content */}
       <main className="flex-1">{children}</main>
+        
+        {/* Chat Support */}
+        <ChatSupport />
+        <WhatsAppButton />
 
       {/* Footer */}
       <footer className="bg-dark-coffee border-t border-coffee mt-16 py-8">
@@ -193,7 +340,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               <p className="text-gray-400">
                 Mon-Sun: 11:00 AM - 11:00 PM
                 <br />
-                Closed on Mondays
+                Open Daily
               </p>
             </div>
           </div>

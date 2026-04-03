@@ -1,27 +1,24 @@
-build:
-  command: npm run build
-  env:
-    - DATABASE_URL
-    - JWT_SECRET
-    - JWT_EXPIRE
-    - STRIPE_SECRET_KEY
-    - STRIPE_WEBHOOK_SECRET
-    - MOMO_API_KEY
-    - MOMO_API_USER
-    - MOMO_ENV
-    - FRONTEND_URL
-    - NODE_ENV=production
-
-run:
-  command: npm start
-  env:
-    - DATABASE_URL
-    - JWT_SECRET
-    - JWT_EXPIRE
-    - STRIPE_SECRET_KEY
-    - STRIPE_WEBHOOK_SECRET
-    - MOMO_API_KEY
-    - MOMO_API_USER
-    - MOMO_ENV
-    - FRONTEND_URL
-    - NODE_ENV=production
+{
+  "build": {
+    "builder": "nicksheffield/render-ts",
+    "buildCommand": "npm install && npx prisma generate && npm run build",
+    "startCommand": "npm start"
+  },
+  "env": {
+    "DATABASE_URL": {
+      "sync": false
+    },
+    "JWT_SECRET": {
+      "sync": false
+    },
+    "JWT_EXPIRE": {
+      "sync": false
+    },
+    "FRONTEND_URL": {
+      "sync": false
+    },
+    "NODE_ENV": {
+      "sync": false
+    }
+  }
+}

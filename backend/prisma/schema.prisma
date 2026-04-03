@@ -29,6 +29,7 @@ model User {
   assignedOrders   Order[] @relation("DeliveryPerson")
   notifications    Notification[]
   addresses        Address[]
+  conversations    ChatConversation[]
 }
 
 model MenuItem {
@@ -75,6 +76,7 @@ model Order {
 
   payment          Payment?
   tracking         DeliveryTracking?
+  notifications     Notification[]
 }
 
 model OrderItem {

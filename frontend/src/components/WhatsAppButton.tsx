@@ -1,5 +1,3 @@
-import { Link } from 'react-router-dom'
-
 const WhatsAppButton: React.FC = () => {
   const phoneNumber = '233571679999'
   const message = 'Hello! I need help with my order.'

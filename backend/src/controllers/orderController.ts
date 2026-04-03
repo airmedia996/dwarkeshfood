@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { prisma, io } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthRequest } from '../middleware/auth.js';
 import { z } from 'zod';
@@ -25,12 +25,15 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
   try {
     const data = createOrderSchema.parse(req.body);
 
-    // Get menu items and calculate totals
-    const menuItems = await prisma.menuItem.findMany({
-      where: {
-        id: { in: data.items.map(i => i.menuItemId) }
-      }
-    });
+    const menuItemIds = data.items.map(i => i.menuItemId);
+    const { data: menuItems, error: menuError } = await supabase
+      .from('menu_items')
+      .select('*')
+      .in('id', menuItemIds);
+
+    if (menuError || !menuItems) {
+      throw new AppError('Failed to fetch menu items', 400);
+    }
 
     let subtotal = 0;
     const orderItems = data.items.map(item => {
@@ -38,66 +41,82 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       if (!menuItem) throw new AppError('Menu item not found', 404);
       subtotal += menuItem.price * item.quantity;
       return {
-        menuItemId: item.menuItemId,
+        menu_item_id: item.menuItemId,
         quantity: item.quantity,
         price: menuItem.price
       };
     });
 
-    const tax = subtotal * 0.05; // 5% tax
-    const deliveryFee = subtotal > 500 ? 0 : 50; // Free delivery for orders > 500
+    const tax = subtotal * 0.05;
+    const deliveryFee = subtotal > 500 ? 0 : 50;
     const totalAmount = subtotal + tax + deliveryFee;
     
-    // Calculate estimated delivery time (30-45 mins based on order size)
     const prepTime = Math.max(...orderItems.map(o => {
-      const item = menuItems.find(m => m.id === o.menuItemId);
-      return item?.preparationTime || 30;
+      const item = menuItems.find(m => m.id === o.menu_item_id);
+      return item?.preparation_time || 30;
     }));
-    const deliveryTime = 15; // 15 mins for delivery
+    const deliveryTime = 15;
     const estimatedMinutes = prepTime + deliveryTime;
-    const estimatedDeliveryTime = new Date(Date.now() + estimatedMinutes * 60000);
+    const estimatedDeliveryTime = new Date(Date.now() + estimatedMinutes * 60000).toISOString();
 
-    const order = await prisma.order.create({
-      data: {
-        customerId: req.user!.id,
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .insert({
+        customer_id: req.user!.id,
         subtotal,
         tax,
-        deliveryFee,
-        totalAmount,
+        delivery_fee: deliveryFee,
+        total_amount: totalAmount,
         status: 'pending',
-        deliveryAddress: data.deliveryAddress,
-        paymentMethod: data.paymentMethod,
-        specialInstructions: data.specialInstructions,
-        estimatedDeliveryTime,
-        items: {
-          create: orderItems
-        },
-        tracking: {
-          create: {
-            currentLat: data.latitude,
-            currentLng: data.longitude
-          }
-        }
-      },
-      include: {
-        items: { include: { menuItem: true } }
-      }
-    });
+        delivery_address: data.deliveryAddress,
+        payment_method: data.paymentMethod,
+        special_instructions: data.specialInstructions,
+        estimated_delivery_time: estimatedDeliveryTime
+      })
+      .select()
+      .single();
 
-    // Create payment record
-    await prisma.payment.create({
-      data: {
-        orderId: order.id,
-        userId: req.user!.id,
+    if (orderError) throw orderError;
+
+    for (const item of orderItems) {
+      const { error: itemError } = await supabase
+        .from('order_items')
+        .insert({
+          order_id: order.id,
+          menu_item_id: item.menu_item_id,
+          quantity: item.quantity,
+          price: item.price
+        });
+      if (itemError) throw itemError;
+    }
+
+    const { error: trackingError } = await supabase
+      .from('delivery_tracking')
+      .insert({
+        order_id: order.id,
+        current_lat: data.latitude,
+        current_lng: data.longitude
+      });
+
+    const { error: paymentError } = await supabase
+      .from('payments')
+      .insert({
+        order_id: order.id,
+        user_id: req.user!.id,
         amount: totalAmount,
-        paymentMethod: data.paymentMethod,
-        status: data.paymentMethod === 'cash' ? 'pending' : 'pending'
-      }
-    });
+        payment_method: data.paymentMethod,
+        status: 'pending'
+      });
 
-    await sendOrderNotification(order.id, req.user!.id, 'order_placed');
+    if (paymentError) console.error('Payment error:', paymentError);
 
-    res.status(201).json(order);
+    const { data: fullOrder } = await supabase
+      .from('orders')
+      .select('*, order_items(*, menu_items(*))')
+      .eq('id', order.id)
+      .single();
+
+    res.status(201).json(fullOrder);
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new AppError('Invalid input', 400);
@@ -108,17 +127,14 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
 export const getOrders = async (req: AuthRequest, res: Response) => {
   try {
-    const orders = await prisma.order.findMany({
-      where: { customerId: req.user!.id },
-      include: {
-        items: { include: { menuItem: true } },
-        payment: true,
-        tracking: true
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*, order_items(*, menu_items(*)), payments(*), delivery_tracking(*)')
+      .eq('customer_id', req.user!.id)
+      .order('created_at', { ascending: false });
 
-    res.json(orders);
+    if (error) throw error;
+    res.json(data || []);
   } catch (error) {
     throw error;
   }
@@ -128,21 +144,17 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const order = await prisma.order.findUnique({
-      where: { id },
-      include: {
-        items: { include: { menuItem: true } },
-        payment: true,
-        tracking: true
-      }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*, order_items(*, menu_items(*)), payments(*), delivery_tracking(*)')
+      .eq('id', id)
+      .single();
 
-    if (!order) {
+    if (error || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    // Verify ownership
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
@@ -156,13 +168,17 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const order = await prisma.order.findUnique({ where: { id } });
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (!order) {
+    if (fetchError || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
@@ -170,31 +186,26 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
       throw new AppError('Cannot cancel order in this status', 400);
     }
 
-    // Check if payment was made - calculate refund
     let refundAmount = 0;
-    if (order.paymentStatus === 'completed') {
-      // Full refund if not yet preparing, partial otherwise
-      refundAmount = order.status === 'pending' ? order.totalAmount : order.totalAmount * 0.5;
+    if (order.payment_status === 'completed') {
+      refundAmount = order.status === 'pending' ? order.total_amount : order.total_amount * 0.5;
     }
 
-    const updatedOrder = await prisma.order.update({
-      where: { id },
-      data: { status: 'cancelled' },
-      include: { payment: true }
-    });
+    const { data: updatedOrder, error } = await supabase
+      .from('orders')
+      .update({ status: 'cancelled' })
+      .eq('id', id)
+      .select()
+      .single();
 
-    // Update payment status if refund applies
-    if (refundAmount > 0 && updatedOrder.payment) {
-      await prisma.payment.update({
-        where: { id: updatedOrder.payment.id },
-        data: { status: 'refunded' as any }
-      });
+    if (error) throw error;
+
+    if (refundAmount > 0) {
+      await supabase
+        .from('payments')
+        .update({ status: 'refunded' })
+        .eq('order_id', id);
     }
-
-    io.to(`order-${id}`).emit('order:updated', {
-      ...updatedOrder,
-      refundAmount
-    });
 
     res.json({
       ...updatedOrder,
@@ -213,22 +224,16 @@ export const rateOrder = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { rating, review } = req.body;
 
-    const order = await prisma.order.findUnique({ where: { id } });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .update({ rating, review })
+      .eq('id', id)
+      .select()
+      .single();
 
-    if (!order) {
-      throw new AppError('Order not found', 404);
-    }
+    if (error) throw error;
 
-    if (order.customerId !== req.user!.id) {
-      throw new AppError('Unauthorized', 403);
-    }
-
-    const updatedOrder = await prisma.order.update({
-      where: { id },
-      data: { rating, review }
-    });
-
-    res.json(updatedOrder);
+    res.json(order);
   } catch (error) {
     throw error;
   }
@@ -238,15 +243,17 @@ export const trackOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const tracking = await prisma.deliveryTracking.findUnique({
-      where: { orderId: id }
-    });
+    const { data, error } = await supabase
+      .from('delivery_tracking')
+      .select('*')
+      .eq('order_id', id)
+      .single();
 
-    if (!tracking) {
+    if (error) {
       throw new AppError('Tracking not found', 404);
     }
 
-    res.json(tracking);
+    res.json(data);
   } catch (error) {
     throw error;
   }

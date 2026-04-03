@@ -24,8 +24,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      dispatch(fetchNotifications())
-      dispatch(fetchUnreadCount())
+      dispatch(fetchNotifications() as any)
+      dispatch(fetchUnreadCount() as any)
     }
   }, [token, dispatch])
 
@@ -58,11 +58,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   }
 
   const handleMarkAsRead = (id: string) => {
-    dispatch(markAsRead(id))
+    dispatch(markAsRead(id) as any)
   }
 
   const handleMarkAllAsRead = () => {
-    dispatch(markAllAsRead())
+    dispatch(markAllAsRead() as any)
   }
 
   const getNotificationIcon = (type: string) => {

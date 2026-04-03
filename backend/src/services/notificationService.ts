@@ -1,4 +1,4 @@
-import { prisma } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { io } from '../index.js';
 
 export type NotificationType = 
@@ -22,48 +22,68 @@ export interface CreateNotificationData {
 }
 
 export const createNotification = async (data: CreateNotificationData) => {
-  const notification = await prisma.notification.create({
-    data: {
-      userId: data.userId,
+  const { data: notification, error } = await supabase
+    .from('notifications')
+    .insert({
+      user_id: data.userId,
       type: data.type,
       title: data.title,
       message: data.message,
-      orderId: data.orderId,
-      data: data.data as unknown as Record<string, string> | null
-    }
-  });
+      order_id: data.orderId,
+      data: data.data as any
+    })
+    .select()
+    .single();
 
-  io.to(`user-${data.userId}`).emit('notification', notification);
+  if (error) throw error;
+  if (io && notification) {
+    io.to(`user-${data.userId}`).emit('notification', notification);
+  }
 
   return notification;
 };
 
 export const getUserNotifications = async (userId: string, limit = 20) => {
-  return prisma.notification.findMany({
-    where: { userId },
-    orderBy: { createdAt: 'desc' },
-    take: limit
-  });
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return data;
 };
 
 export const markAsRead = async (notificationId: string, userId: string) => {
-  return prisma.notification.updateMany({
-    where: { id: notificationId, userId },
-    data: { isRead: true }
-  });
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('id', notificationId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
 };
 
 export const markAllAsRead = async (userId: string) => {
-  return prisma.notification.updateMany({
-    where: { userId, isRead: false },
-    data: { isRead: true }
-  });
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('user_id', userId)
+    .eq('is_read', false);
+
+  if (error) throw error;
 };
 
 export const getUnreadCount = async (userId: string) => {
-  return prisma.notification.count({
-    where: { userId, isRead: false }
-  });
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('is_read', false);
+
+  if (error) throw error;
+  return count || 0;
 };
 
 export const sendOrderNotification = async (

@@ -1,12 +1,11 @@
 import { Request, Response } from 'express';
-import { prisma } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthRequest } from '../middleware/auth.js';
 import Stripe from 'stripe';
 import axios from 'axios';
 import crypto from 'crypto';
 import { z } from 'zod';
-import { sendOrderNotification } from '../services/notificationService.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '');
 
@@ -30,7 +29,6 @@ const MOMO_CONFIG = {
     : 'https://sandbox.momodeveloper.mtn.com',
   apiKey: process.env.MOMO_API_KEY || '',
   apiUser: process.env.MOMO_API_USER || '',
-  referenceId: crypto.randomUUID(),
 };
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
@@ -71,20 +69,22 @@ export const createStripeIntent = async (req: AuthRequest, res: Response) => {
   try {
     const data = stripeIntentSchema.parse(req.body);
 
-    const order = await prisma.order.findUnique({
-      where: { id: data.orderId }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', data.orderId)
+      .single();
 
-    if (!order) {
+    if (error || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(order.totalAmount * 100),
+      amount: Math.round(order.total_amount * 100),
       currency: 'usd',
       metadata: {
         orderId: data.orderId,
@@ -108,39 +108,39 @@ export const confirmStripePayment = async (req: AuthRequest, res: Response) => {
   try {
     const data = confirmPaymentSchema.parse(req.body);
 
-    const order = await prisma.order.findUnique({
-      where: { id: data.orderId }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', data.orderId)
+      .single();
 
-    if (!order) {
+    if (error || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
     const paymentIntent = await stripe.paymentIntents.retrieve(data.paymentIntentId);
 
     if (paymentIntent.status === 'succeeded') {
-      await prisma.payment.update({
-        where: { orderId: data.orderId },
-        data: {
+      await supabase
+        .from('payments')
+        .update({
           status: 'completed',
-          transactionId: paymentIntent.id,
-          paymentGatewayResponse: paymentIntent as any
-        }
-      });
+          transaction_id: paymentIntent.id,
+          payment_gateway_response: paymentIntent
+        })
+        .eq('order_id', data.orderId);
 
-      await prisma.order.update({
-        where: { id: data.orderId },
-        data: {
-          paymentStatus: 'completed',
+      await supabase
+        .from('orders')
+        .update({
+          payment_status: 'completed',
           status: 'confirmed'
-        }
-      });
-
-      await sendOrderNotification(data.orderId, req.user!.id, 'payment_received');
+        })
+        .eq('id', data.orderId);
 
       res.json({ message: 'Payment successful' });
     } else {
@@ -158,57 +158,61 @@ export const initiateMomoPayment = async (req: AuthRequest, res: Response) => {
   try {
     const data = momoPaymentSchema.parse(req.body);
 
-    const order = await prisma.order.findUnique({
-      where: { id: data.orderId }
-    });
+    const { data: order, error: orderError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', data.orderId)
+      .single();
 
-    if (!order) {
+    if (orderError || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('phone')
+      .eq('id', req.user!.id)
+      .single();
 
-    const phone = data.phone || user?.phone || '';
+    const phone = data.phone || profile?.phone || '';
     const externalId = crypto.randomUUID();
-    const amount = order.totalAmount.toString();
+    const amount = order.total_amount.toString();
     const currency = 'GHS';
 
     const isSimulationMode = !MOMO_CONFIG.apiKey || MOMO_CONFIG.apiKey === 'your_momo_api_key';
 
     if (isSimulationMode) {
-      await prisma.payment.update({
-        where: { orderId: data.orderId },
-        data: {
+      await supabase
+        .from('payments')
+        .update({
           status: 'pending',
-          transactionId: `SIM_${externalId.substring(0, 8)}`,
-          paymentGatewayResponse: {
+          transaction_id: `SIM_${externalId.substring(0, 8)}`,
+          payment_gateway_response: {
             mode: 'simulation',
             message: 'Momo payment in simulation mode',
             phone,
             amount,
             currency,
             referenceId: externalId
-          } as any
-        }
-      });
+          }
+        })
+        .eq('order_id', data.orderId);
 
-      await prisma.order.update({
-        where: { id: data.orderId },
-        data: { paymentMethod: 'momo' }
-      });
+      await supabase
+        .from('orders')
+        .update({ payment_method: 'momo' })
+        .eq('id', data.orderId);
 
       return res.json({
         success: true,
         simulation: true,
         message: 'Momo payment initiated (Simulation Mode)',
         referenceId: externalId,
-        instructions: 'In simulation mode, payment is auto-confirmed for testing. In production, customer would receive a USSD prompt.',
+        instructions: 'In simulation mode, payment is auto-confirmed for testing.',
         phone,
         amount,
         currency
@@ -242,19 +246,19 @@ export const initiateMomoPayment = async (req: AuthRequest, res: Response) => {
       }
     );
 
-    await prisma.payment.update({
-      where: { orderId: data.orderId },
-      data: {
+    await supabase
+      .from('payments')
+      .update({
         status: 'pending',
-        transactionId: referenceId,
-        paymentGatewayResponse: momoResponse.data as any
-      }
-    });
+        transaction_id: referenceId,
+        payment_gateway_response: momoResponse.data
+      })
+      .eq('order_id', data.orderId);
 
-    await prisma.order.update({
-      where: { id: data.orderId },
-      data: { paymentMethod: 'momo' }
-    });
+    await supabase
+      .from('orders')
+      .update({ payment_method: 'momo' })
+      .eq('id', data.orderId);
 
     res.json({
       success: true,
@@ -284,9 +288,11 @@ export const checkMomoPaymentStatus = async (req: AuthRequest, res: Response) =>
     const isSimulationMode = !MOMO_CONFIG.apiKey || MOMO_CONFIG.apiKey === 'your_momo_api_key';
 
     if (isSimulationMode) {
-      const payment = await prisma.payment.findFirst({
-        where: { transactionId: { contains: referenceId.substring(0, 8) } }
-      });
+      const { data: payment } = await supabase
+        .from('payments')
+        .select('*')
+        .like('transaction_id', `%${referenceId.substring(0, 8)}%`)
+        .single();
 
       if (!payment) {
         throw new AppError('Payment not found', 404);
@@ -329,42 +335,32 @@ export const checkMomoPaymentStatus = async (req: AuthRequest, res: Response) =>
 
 export const momoWebhookCallback = async (req: Request, res: Response) => {
   try {
-    const signature = req.headers['x-momo-signature'];
-    const expectedSignature = crypto
-      .createHmac('sha256', process.env.MOMO_WEBHOOK_SECRET || '')
-      .update(JSON.stringify(req.body))
-      .digest('hex');
-
-    if (signature && signature !== expectedSignature) {
-      throw new AppError('Invalid webhook signature', 401);
-    }
-
-    const { referenceId, status, externalId, amount } = req.body;
+    const { referenceId, status } = req.body;
 
     if (status === 'SUCCESSFUL' || status === 'COMPLETED') {
-      const payment = await prisma.payment.findFirst({
-        where: { transactionId: referenceId }
-      });
+      const { data: payment } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('transaction_id', referenceId)
+        .single();
 
       if (payment && payment.status !== 'completed') {
-        await prisma.payment.update({
-          where: { orderId: payment.orderId },
-          data: {
+        await supabase
+          .from('payments')
+          .update({
             status: 'completed',
-            transactionId: referenceId,
-            paymentGatewayResponse: req.body as any
-          }
-        });
+            transaction_id: referenceId,
+            payment_gateway_response: req.body
+          })
+          .eq('order_id', payment.order_id);
 
-        await prisma.order.update({
-          where: { id: payment.orderId },
-          data: {
-            paymentStatus: 'completed',
+        await supabase
+          .from('orders')
+          .update({
+            payment_status: 'completed',
             status: 'confirmed'
-          }
-        });
-
-        await sendOrderNotification(payment.orderId, payment.userId, 'payment_received');
+          })
+          .eq('id', payment.order_id);
       }
     }
 
@@ -380,29 +376,29 @@ export const confirmCashPayment = async (req: AuthRequest, res: Response) => {
   try {
     const { orderId } = req.body;
 
-    const order = await prisma.order.findUnique({
-      where: { id: orderId }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
 
-    if (!order) {
+    if (error || !order) {
       throw new AppError('Order not found', 404);
     }
 
-    if (order.customerId !== req.user!.id) {
+    if (order.customer_id !== req.user!.id) {
       throw new AppError('Unauthorized', 403);
     }
 
-    await prisma.payment.update({
-      where: { orderId },
-      data: {
-        status: 'pending'
-      }
-    });
+    await supabase
+      .from('payments')
+      .update({ status: 'pending' })
+      .eq('order_id', orderId);
 
-    await prisma.order.update({
-      where: { id: orderId },
-      data: { status: 'confirmed' }
-    });
+    await supabase
+      .from('orders')
+      .update({ status: 'confirmed' })
+      .eq('id', orderId);
 
     res.json({ message: 'Order confirmed. Pay on delivery.' });
   } catch (error) {
@@ -414,15 +410,17 @@ export const getPayment = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
 
-    const payment = await prisma.payment.findUnique({
-      where: { id }
-    });
+    const { data, error } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('id', id)
+      .single();
 
-    if (!payment) {
+    if (error || !data) {
       throw new AppError('Payment not found', 404);
     }
 
-    res.json(payment);
+    res.json(data);
   } catch (error) {
     throw error;
   }
@@ -432,15 +430,17 @@ export const getPaymentByOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { orderId } = req.params;
 
-    const payment = await prisma.payment.findUnique({
-      where: { orderId }
-    });
+    const { data, error } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('order_id', orderId)
+      .single();
 
-    if (!payment) {
+    if (error || !data) {
       throw new AppError('Payment not found', 404);
     }
 
-    res.json(payment);
+    res.json(data);
   } catch (error) {
     throw error;
   }

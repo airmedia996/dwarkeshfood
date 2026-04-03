@@ -1,72 +1,67 @@
 import express from 'express';
 import { Request, Response } from 'express';
 import { authenticateToken, AuthRequest } from '../middleware/auth.js';
-import { prisma } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { AppError } from '../middleware/errorHandler.js';
-import { z } from 'zod';
 
 const router = express.Router();
 
-// Get user profile
 router.get('/profile', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user!.id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        address: true,
-        city: true,
-        zipCode: true,
-        profileImage: true,
-        role: true,
-        createdAt: true
-      }
-    });
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', req.user!.id)
+      .single();
 
-    if (!user) {
+    if (error || !data) {
       throw new AppError('User not found', 404);
     }
 
-    res.json(user);
+    res.json(data);
   } catch (error) {
     throw error;
   }
 });
 
-// Update user profile
 router.put('/profile', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { name, phone, address, city, zipCode, profileImage } = req.body;
+    const { name, phone, address, city, zip_code, profile_image } = req.body;
 
-    const user = await prisma.user.update({
-      where: { id: req.user!.id },
-      data: {
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({
         name: name || undefined,
         phone: phone || undefined,
         address: address || undefined,
         city: city || undefined,
-        zipCode: zipCode || undefined,
-        profileImage: profileImage || undefined
-      }
-    });
+        zip_code: zip_code || undefined,
+        profile_image: profile_image || undefined,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', req.user!.id)
+      .select()
+      .single();
 
-    res.json(user);
+    if (error) throw error;
+
+    res.json(data);
   } catch (error) {
     throw error;
   }
 });
 
-// Address management
 router.get('/addresses', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const addresses = await prisma.address.findMany({
-      where: { userId: req.user!.id },
-      orderBy: { isDefault: 'desc' }
-    });
-    res.json(addresses);
+    const { data, error } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('user_id', req.user!.id)
+      .order('is_default', { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data || []);
   } catch (error) {
     throw error;
   }
@@ -74,29 +69,34 @@ router.get('/addresses', authenticateToken, async (req: AuthRequest, res: Respon
 
 router.post('/addresses', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const { label, fullAddress, city, zipCode, latitude, longitude, isDefault } = req.body;
+    const { label, full_address, city, zip_code, latitude, longitude, is_default } = req.body;
 
-    if (isDefault) {
-      await prisma.address.updateMany({
-        where: { userId: req.user!.id, isDefault: true },
-        data: { isDefault: false }
-      });
+    if (is_default) {
+      await supabase
+        .from('addresses')
+        .update({ is_default: false })
+        .eq('user_id', req.user!.id)
+        .eq('is_default', true);
     }
 
-    const address = await prisma.address.create({
-      data: {
-        userId: req.user!.id,
+    const { data, error } = await supabase
+      .from('addresses')
+      .insert({
+        user_id: req.user!.id,
         label,
-        fullAddress,
+        full_address,
         city,
-        zipCode,
+        zip_code,
         latitude,
         longitude,
-        isDefault: isDefault || false
-      }
-    });
+        is_default: is_default || false
+      })
+      .select()
+      .single();
 
-    res.status(201).json(address);
+    if (error) throw error;
+
+    res.status(201).json(data);
   } catch (error) {
     throw error;
   }
@@ -105,37 +105,46 @@ router.post('/addresses', authenticateToken, async (req: AuthRequest, res: Respo
 router.put('/addresses/:id', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { label, fullAddress, city, zipCode, latitude, longitude, isDefault } = req.body;
+    const { label, full_address, city, zip_code, latitude, longitude, is_default } = req.body;
 
-    const existingAddress = await prisma.address.findFirst({
-      where: { id, userId: req.user!.id }
-    });
+    const { data: existing } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', req.user!.id)
+      .single();
 
-    if (!existingAddress) {
+    if (!existing) {
       throw new AppError('Address not found', 404);
     }
 
-    if (isDefault) {
-      await prisma.address.updateMany({
-        where: { userId: req.user!.id, isDefault: true },
-        data: { isDefault: false }
-      });
+    if (is_default) {
+      await supabase
+        .from('addresses')
+        .update({ is_default: false })
+        .eq('user_id', req.user!.id)
+        .eq('is_default', true);
     }
 
-    const address = await prisma.address.update({
-      where: { id },
-      data: {
+    const { data, error } = await supabase
+      .from('addresses')
+      .update({
         label: label || undefined,
-        fullAddress: fullAddress || undefined,
+        full_address: full_address || undefined,
         city: city || undefined,
-        zipCode: zipCode || undefined,
+        zip_code: zip_code || undefined,
         latitude: latitude || undefined,
         longitude: longitude || undefined,
-        isDefault: isDefault !== undefined ? isDefault : undefined
-      }
-    });
+        is_default: is_default !== undefined ? is_default : undefined,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single();
 
-    res.json(address);
+    if (error) throw error;
+
+    res.json(data);
   } catch (error) {
     throw error;
   }
@@ -145,15 +154,23 @@ router.delete('/addresses/:id', authenticateToken, async (req: AuthRequest, res:
   try {
     const { id } = req.params;
 
-    const existingAddress = await prisma.address.findFirst({
-      where: { id, userId: req.user!.id }
-    });
+    const { data: existing } = await supabase
+      .from('addresses')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', req.user!.id)
+      .single();
 
-    if (!existingAddress) {
+    if (!existing) {
       throw new AppError('Address not found', 404);
     }
 
-    await prisma.address.delete({ where: { id } });
+    const { error } = await supabase
+      .from('addresses')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
 
     res.json({ success: true });
   } catch (error) {
@@ -161,72 +178,43 @@ router.delete('/addresses/:id', authenticateToken, async (req: AuthRequest, res:
   }
 });
 
-// Change password
 router.post('/change-password', authenticateToken, async (req: AuthRequest, res: Response) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    const user = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!user) {
-      throw new AppError('User not found', 404);
-    }
-
-    const bcrypt = await import('bcryptjs');
-    const isValid = await bcrypt.default.compare(currentPassword, user.password);
-
-    if (!isValid) {
-      throw new AppError('Current password is incorrect', 400);
-    }
-
-    const hashedPassword = await bcrypt.default.hash(newPassword, 10);
-
-    await prisma.user.update({
-      where: { id: req.user!.id },
-      data: { password: hashedPassword }
-    });
-
-    res.json({ message: 'Password changed successfully' });
-  } catch (error) {
-    throw error;
-  }
+  res.json({ message: 'Password change is handled by Supabase Auth' });
 });
 
-// Get order stats
 router.get('/stats', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
-    const totalOrders = await prisma.order.count({
-      where: { customerId: req.user!.id }
-    });
+    const { count: totalOrders } = await supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('customer_id', req.user!.id);
 
-    const completedOrders = await prisma.order.count({
-      where: { customerId: req.user!.id, status: 'delivered' }
-    });
+    const { count: completedOrders } = await supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('customer_id', req.user!.id)
+      .eq('status', 'delivered');
 
-    const totalSpent = await prisma.order.aggregate({
-      where: { customerId: req.user!.id, paymentStatus: 'completed' },
-      _sum: { totalAmount: true }
-    });
+    const { data: spentData } = await supabase
+      .from('orders')
+      .select('total_amount')
+      .eq('customer_id', req.user!.id)
+      .eq('payment_status', 'completed');
 
-    const recentOrders = await prisma.order.findMany({
-      where: { customerId: req.user!.id },
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        totalAmount: true,
-        status: true,
-        createdAt: true
-      }
-    });
+    const totalSpent = spentData?.reduce((sum, o) => sum + (o.total_amount || 0), 0) || 0;
+
+    const { data: recentOrders } = await supabase
+      .from('orders')
+      .select('id, total_amount, status, created_at')
+      .eq('customer_id', req.user!.id)
+      .order('created_at', { ascending: false })
+      .limit(5);
 
     res.json({
-      totalOrders,
-      completedOrders,
-      totalSpent: totalSpent._sum.totalAmount || 0,
-      recentOrders
+      totalOrders: totalOrders || 0,
+      completedOrders: completedOrders || 0,
+      totalSpent,
+      recentOrders: recentOrders || []
     });
   } catch (error) {
     throw error;

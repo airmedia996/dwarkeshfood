@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { api } from '../services/api'
+import api from '../services/api'
 import { io } from 'socket.io-client'
 import { useSelector } from 'react-redux'
 import { RootState } from '../store/index'
@@ -23,7 +23,7 @@ interface Conversation {
 }
 
 const ChatSupport: React.FC = () => {
-  const { user, token } = useSelector((state: RootState) => state.auth)
+  const { token } = useSelector((state: RootState) => state.auth)
   const [isOpen, setIsOpen] = useState(false)
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -147,7 +147,7 @@ const ChatSupport: React.FC = () => {
                 <p className="text-sm">We'll respond as soon as possible</p>
               </div>
             ) : (
-              messages.map((msg, index) => (
+              messages.map((msg, _index) => (
                 <div
                   key={msg.id}
                   className={`flex ${msg.senderType === 'user' ? 'justify-end' : 'justify-start'}`}

@@ -1,7 +1,8 @@
 import axios from 'axios'
+import { supabase } from '../lib/supabase'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api'
-const USE_MOCK = false // Set to true to use mock data
+const USE_MOCK = false
 
 const api = axios.create({
   baseURL: USE_MOCK ? '' : API_BASE_URL,
@@ -10,11 +11,11 @@ const api = axios.create({
   },
 })
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use(async (config) => {
   console.log('API Request:', config.method?.toUpperCase(), config.url)
-  const token = localStorage.getItem('token')
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.access_token) {
+    config.headers.Authorization = `Bearer ${session.access_token}`
   }
   return config
 })
@@ -26,19 +27,23 @@ api.interceptors.response.use(
   },
   (error) => {
     console.error('API Error:', error.response?.status, error.response?.data)
+    if (error.response?.status === 401) {
+      localStorage.removeItem('user')
+      localStorage.removeItem('session')
+      window.location.href = '/login'
+    }
     return Promise.reject(error)
   }
 )
 
-// Auth API
 export const authAPI = {
   register: (data: { name: string; email: string; phone: string; password: string }) =>
     api.post('/auth/register', data),
   login: (data: { email: string; password: string }) => api.post('/auth/login', data),
   logout: () => api.post('/auth/logout'),
+  me: () => api.get('/auth/me')
 }
 
-// Menu API
 export const menuAPI = {
   getMenuItems: (params?: { category?: string; search?: string }) =>
     api.get('/menu', { params }),
@@ -49,7 +54,6 @@ export const menuAPI = {
   deleteMenuItem: (id: string) => api.delete(`/menu/${id}`),
 }
 
-// Orders API
 export const ordersAPI = {
   createOrder: (data: any) => api.post('/orders', data),
   getOrders: () => api.get('/orders'),
@@ -59,7 +63,6 @@ export const ordersAPI = {
   trackOrder: (id: string) => api.get(`/orders/${id}/tracking`),
 }
 
-// Payments API
 export const paymentsAPI = {
   createStripeIntent: (orderId: string) =>
     api.post('/payments/stripe/intent', { orderId }),
@@ -75,7 +78,6 @@ export const paymentsAPI = {
   getPaymentByOrder: (orderId: string) => api.get(`/payments/order/${orderId}`),
 }
 
-// Users API
 export const usersAPI = {
   getProfile: () => api.get('/users/profile'),
   updateProfile: (data: any) => api.put('/users/profile', data),
@@ -87,7 +89,6 @@ export const usersAPI = {
   getStats: () => api.get('/users/stats'),
 }
 
-// Admin API
 export const adminAPI = {
   getDashboard: () => api.get('/admin/dashboard'),
   getOrders: (params?: any) => api.get('/admin/orders', { params }),

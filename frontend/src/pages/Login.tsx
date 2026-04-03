@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
-import { setUser } from '../store/slices/authSlice'
-import { authAPI } from '../services/api'
+import { setUser, signIn } from '../store/slices/authSlice'
+import { supabase } from '../lib/supabase'
 
 const Login: React.FC = () => {
   const navigate = useNavigate()
@@ -11,22 +11,62 @@ const Login: React.FC = () => {
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
+        
+        const user = {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: profile?.name || session.user.user_metadata?.name || '',
+          phone: profile?.phone || session.user.user_metadata?.phone || '',
+          role: profile?.role || 'customer'
+        }
+        dispatch(setUser({ user, session }))
+        navigate('/')
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [dispatch, navigate])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     setError('')
     
     try {
-      const response = await authAPI.login(formData)
-      if (response.data && response.data.token) {
-        dispatch(setUser(response.data))
-        navigate('/')
-      } else {
-        setError('Invalid response from server')
+      const result = await signIn(formData.email, formData.password)
+      const data = result as { user: any; session: any }
+      if (!data.user) {
+        setError('Login failed')
+        return
       }
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single()
+
+      const user = {
+        id: data.user.id,
+        email: data.user.email || '',
+        name: profile?.name || data.user.user_metadata?.name || '',
+        phone: profile?.phone || data.user.user_metadata?.phone || '',
+        role: profile?.role || 'customer'
+      }
+      
+      dispatch(setUser({ user, session: data.session }))
+      navigate('/')
     } catch (err: any) {
       console.log('Login error:', err)
-      setError('Login failed. Please check console for details.')
+      setError(err.message || 'Login failed. Please try again.')
     } finally {
       setIsLoading(false)
     }

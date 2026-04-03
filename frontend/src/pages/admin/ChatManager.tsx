@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { api } from '../../services/api'
+import api from '../../services/api'
 
 interface Message {
   id: string
@@ -129,7 +129,7 @@ const ChatManager: React.FC = () => {
                         </p>
                       </div>
                       <span className={`text-xs ${selectedConversation?.id === conv.id ? 'text-black/70' : 'text-gray-500'}`}>
-                        {new Date(conv.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        {new Date((conv as any).updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                     {conv.lastMessage && (

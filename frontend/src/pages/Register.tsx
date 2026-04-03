@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useDispatch } from 'react-redux'
-import { setUser } from '../store/slices/authSlice'
-import { authAPI } from '../services/api'
+import { setUser, signUp } from '../store/slices/authSlice'
+import { supabase } from '../lib/supabase'
 
 const Register: React.FC = () => {
   const navigate = useNavigate()
@@ -10,6 +10,31 @@ const Register: React.FC = () => {
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', password: '' })
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .single()
+        
+        const user = {
+          id: session.user.id,
+          email: session.user.email || '',
+          name: profile?.name || session.user.user_metadata?.name || '',
+          phone: profile?.phone || session.user.user_metadata?.phone || '',
+          role: profile?.role || 'customer'
+        }
+        dispatch(setUser({ user, session }))
+        navigate('/')
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [dispatch, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -17,19 +42,58 @@ const Register: React.FC = () => {
     setError('')
     
     try {
-      const response = await authAPI.register(formData)
-      if (response.data && response.data.token) {
-        dispatch(setUser(response.data))
+      const result = await signUp(
+        formData.email, 
+        formData.password, 
+        formData.name,
+        formData.phone
+      )
+      const data = result as { user: any; session: any }
+      
+      if (data.user && !data.session) {
+        setSuccess(true)
+        setError('')
+      } else if (data.session) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', data.user?.id)
+          .single()
+
+        const user = {
+          id: data.user?.id || '',
+          email: data.user?.email || '',
+          name: profile?.name || formData.name,
+          phone: profile?.phone || formData.phone,
+          role: profile?.role || 'customer'
+        }
+        dispatch(setUser({ user, session: data.session }))
         navigate('/')
-      } else {
-        setError('Invalid response from server')
       }
     } catch (err: any) {
       console.log('Register error:', err)
-      setError('Registration failed. Please check console for details.')
+      setError(err.message || 'Registration failed. Please try again.')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  if (success) {
+    return (
+      <div className="min-h-screen bg-black py-12 flex items-center justify-center">
+        <div className="w-full max-w-md px-4">
+          <div className="bg-dark-coffee border border-coffee rounded-lg p-8 text-center">
+            <h1 className="text-3xl font-bold text-gold mb-4">Check Your Email</h1>
+            <p className="text-white mb-4">
+              We've sent you a confirmation email. Please check your inbox and click the link to verify your account.
+            </p>
+            <Link to="/login" className="text-gold hover:underline">
+              Go to Login
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

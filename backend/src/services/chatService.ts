@@ -1,39 +1,51 @@
-import { prisma, io } from '../index.js';
+import { supabase } from '../lib/supabase.js';
+import { io } from '../index.js';
 
 export const createConversation = async (userId: string) => {
-  const existing = await prisma.chatConversation.findFirst({
-    where: { userId, status: 'active' },
-    orderBy: { updatedAt: 'desc' }
-  });
+  const { data: existing } = await supabase
+    .from('chat_conversations')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .single();
 
   if (existing) return existing;
 
-  return prisma.chatConversation.create({
-    data: { userId }
-  });
+  const { data, error } = await supabase
+    .from('chat_conversations')
+    .insert({ user_id: userId })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
 };
 
 export const getConversation = async (conversationId: string) => {
-  return prisma.chatConversation.findUnique({
-    where: { id: conversationId },
-    include: {
-      user: { select: { id: true, name: true, email: true } },
-      messages: { orderBy: { createdAt: 'asc' } }
-    }
-  });
+  const { data, error } = await supabase
+    .from('chat_conversations')
+    .select('*, profiles!user_id(id, name, email), chat_messages(*)')
+    .eq('id', conversationId)
+    .single();
+
+  if (error) throw error;
+  return data;
 };
 
 export const getUserConversation = async (userId: string) => {
-  return prisma.chatConversation.findFirst({
-    where: { userId, status: 'active' },
-    include: {
-      messages: { 
-        orderBy: { createdAt: 'desc' },
-        take: 1
-      }
-    },
-    orderBy: { updatedAt: 'desc' }
-  });
+  const { data, error } = await supabase
+    .from('chat_conversations')
+    .select('*, chat_messages(*)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .single();
+
+  if (error) throw error;
+  return data;
 };
 
 export const sendMessage = async (
@@ -42,55 +54,74 @@ export const sendMessage = async (
   senderType: 'user' | 'admin',
   content: string
 ) => {
-  const message = await prisma.chatMessage.create({
-    data: {
-      conversationId,
-      senderId,
-      senderType,
+  const { data: message, error } = await supabase
+    .from('chat_messages')
+    .insert({
+      conversation_id: conversationId,
+      sender_id: senderId,
+      sender_type: senderType,
       content
-    }
-  });
+    })
+    .select()
+    .single();
 
-  await prisma.chatConversation.update({
-    where: { id: conversationId },
-    data: { lastMessage: content, updatedAt: new Date() }
-  });
+  if (error) throw error;
 
-  io.to(`chat-${conversationId}`).emit('chat:message', message);
+  await supabase
+    .from('chat_conversations')
+    .update({ 
+      last_message: content, 
+      updated_at: new Date().toISOString() 
+    })
+    .eq('id', conversationId);
+
+  if (io) {
+    io.to(`chat-${conversationId}`).emit('chat:message', message);
+  }
 
   return message;
 };
 
 export const getConversations = async (adminId: string) => {
-  return prisma.chatConversation.findMany({
-    where: { status: 'active' },
-    include: {
-      user: { select: { id: true, name: true, email: true, phone: true } },
-      messages: { 
-        orderBy: { createdAt: 'desc' },
-        take: 1
-      }
-    },
-    orderBy: { updatedAt: 'desc' }
-  });
+  const { data, error } = await supabase
+    .from('chat_conversations')
+    .select('*, profiles!user_id(id, name, email, phone), chat_messages(*)')
+    .eq('status', 'active')
+    .order('updated_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
 };
 
 export const closeConversation = async (conversationId: string, adminId: string) => {
-  return prisma.chatConversation.update({
-    where: { id: conversationId },
-    data: { status: 'closed', adminId }
-  });
+  const { data, error } = await supabase
+    .from('chat_conversations')
+    .update({ status: 'closed', admin_id: adminId })
+    .eq('id', conversationId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
 };
 
 export const getUnreadCount = async (conversationId: string) => {
-  return prisma.chatMessage.count({
-    where: { conversationId, isRead: false, senderType: 'admin' }
-  });
+  const { count, error } = await supabase
+    .from('chat_messages')
+    .select('*', { count: 'exact', head: true })
+    .eq('conversation_id', conversationId)
+    .eq('is_read', false)
+    .eq('sender_type', 'admin');
+
+  if (error) throw error;
+  return count || 0;
 };
 
 export const markAsRead = async (messageIds: string[]) => {
-  return prisma.chatMessage.updateMany({
-    where: { id: { in: messageIds } },
-    data: { isRead: true }
-  });
+  const { error } = await supabase
+    .from('chat_messages')
+    .update({ is_read: true })
+    .in('id', messageIds);
+
+  if (error) throw error;
 };

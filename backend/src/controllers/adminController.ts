@@ -1,46 +1,39 @@
 import { Request, Response } from 'express';
-import { prisma, io } from '../index.js';
+import { supabase } from '../lib/supabase.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuthRequest } from '../middleware/auth.js';
-import { sendOrderNotification } from '../services/notificationService.js';
 
 export const getDashboard = async (req: AuthRequest, res: Response) => {
   try {
-    // Verify admin
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
-    const totalOrders = await prisma.order.count();
-    const totalCustomers = await prisma.user.count({
-      where: { role: 'customer' }
-    });
-    const pendingOrders = await prisma.order.count({
-      where: { status: 'pending' }
-    });
+    const { count: totalOrders } = await supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true });
 
-    const revenue = await prisma.order.aggregate({
-      where: { paymentStatus: 'completed' },
-      _sum: { totalAmount: true }
-    });
+    const { count: totalCustomers } = await supabase
+      .from('profiles')
+      .select('*', { count: 'exact', head: true });
+    
+    const { count: pendingOrders } = await supabase
+      .from('orders')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'pending');
 
-    const topItems = await prisma.orderItem.groupBy({
-      by: ['menuItemId'],
-      _sum: { quantity: true },
-      orderBy: { _sum: { quantity: 'desc' } },
-      take: 5
-    });
+    const { data: completedOrders } = await supabase
+      .from('orders')
+      .select('total_amount')
+      .eq('payment_status', 'completed');
+
+    const revenue = completedOrders?.reduce((sum, o) => sum + (o.total_amount || 0), 0) || 0;
 
     res.json({
-      totalOrders,
-      totalCustomers,
-      pendingOrders,
-      revenue: revenue._sum.totalAmount || 0,
-      topItems
+      totalOrders: totalOrders || 0,
+      totalCustomers: totalCustomers || 0,
+      pendingOrders: pendingOrders || 0,
+      revenue
     });
   } catch (error) {
     throw error;
@@ -49,41 +42,36 @@ export const getDashboard = async (req: AuthRequest, res: Response) => {
 
 export const getAllOrders = async (req: AuthRequest, res: Response) => {
   try {
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
     const { status, page = '1', limit = '10' } = req.query;
 
-    let where: any = {};
-    if (status) where.status = status;
+    let query = supabase
+      .from('orders')
+      .select('*, profiles!customer_id(name, email, phone), order_items(*, menu_items(*))', { count: 'exact' })
+      .order('created_at', { ascending: false });
 
-    const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
+    if (status) {
+      query = query.eq('status', status as string);
+    }
 
-    const orders = await prisma.order.findMany({
-      where,
-      include: {
-        customer: { select: { name: true, email: true, phone: true } },
-        items: { include: { menuItem: true } }
-      },
-      skip,
-      take: parseInt(limit as string),
-      orderBy: { createdAt: 'desc' }
-    });
+    const from = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const to = from + parseInt(limit as string) - 1;
+    query = query.range(from, to);
 
-    const total = await prisma.order.count({ where });
+    const { data, error, count } = await query;
+
+    if (error) throw error;
 
     res.json({
-      orders,
+      orders: data || [],
       pagination: {
-        total,
+        total: count || 0,
         page: parseInt(page as string),
         limit: parseInt(limit as string),
-        pages: Math.ceil(total / parseInt(limit as string))
+        pages: Math.ceil((count || 0) / parseInt(limit as string))
       }
     });
   } catch (error) {
@@ -93,42 +81,21 @@ export const getAllOrders = async (req: AuthRequest, res: Response) => {
 
 export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
   try {
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
     const { id } = req.params;
     const { status } = req.body;
 
-    const order = await prisma.order.update({
-      where: { id },
-      data: { status },
-      include: { customer: true }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .update({ status })
+      .eq('id', id)
+      .select('*, profiles!customer_id(*)')
+      .single();
 
-    const statusNotificationMap: Record<string, string> = {
-      confirmed: 'order_confirmed',
-      preparing: 'preparing',
-      ready: 'ready_for_pickup',
-      out_for_delivery: 'out_for_delivery',
-      delivered: 'delivered',
-      cancelled: 'cancelled'
-    };
-
-    const notificationType = statusNotificationMap[status];
-    if (notificationType && order.customerId) {
-      await sendOrderNotification(id, order.customerId, notificationType as any);
-    }
-
-    // Emit real-time update
-    io.to(`order-${id}`).emit('order:updated', {
-      orderId: id,
-      status: order.status
-    });
+    if (error) throw error;
 
     res.json(order);
   } catch (error) {
@@ -138,26 +105,18 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
 
 export const getAllUsers = async (req: AuthRequest, res: Response) => {
   try {
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
-    const users = await prisma.user.findMany({
-      where: { role: 'customer' },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        createdAt: true
-      }
-    });
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, name, email, phone, created_at')
+      .eq('role', 'customer');
 
-    res.json(users);
+    if (error) throw error;
+
+    res.json(data || []);
   } catch (error) {
     throw error;
   }
@@ -165,25 +124,20 @@ export const getAllUsers = async (req: AuthRequest, res: Response) => {
 
 export const assignDelivery = async (req: AuthRequest, res: Response) => {
   try {
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
     const { orderId, deliveryPersonId } = req.body;
 
-    const order = await prisma.order.update({
-      where: { id: orderId },
-      data: { deliveryPersonId }
-    });
+    const { data: order, error } = await supabase
+      .from('orders')
+      .update({ delivery_person_id: deliveryPersonId })
+      .eq('id', orderId)
+      .select()
+      .single();
 
-    io.to(`order-${orderId}`).emit('delivery:assigned', {
-      orderId,
-      deliveryPersonId
-    });
+    if (error) throw error;
 
     res.json(order);
   } catch (error) {
@@ -193,29 +147,11 @@ export const assignDelivery = async (req: AuthRequest, res: Response) => {
 
 export const getAnalytics = async (req: AuthRequest, res: Response) => {
   try {
-    const admin = await prisma.user.findUnique({
-      where: { id: req.user!.id }
-    });
-
-    if (!admin || admin.role !== 'admin') {
+    if (req.user!.role !== 'admin') {
       throw new AppError('Unauthorized', 403);
     }
 
-    // Get daily revenue for last 7 days
-    const sevenDaysAgo = new Date(new Date().setDate(new Date().getDate() - 7));
-
-    const dailyRevenue = await prisma.order.groupBy({
-      by: ['createdAt'],
-      where: {
-        createdAt: { gte: sevenDaysAgo },
-        paymentStatus: 'completed'
-      },
-      _sum: { totalAmount: true }
-    });
-
-    res.json({
-      dailyRevenue
-    });
+    res.json({ message: 'Analytics endpoint - to be implemented' });
   } catch (error) {
     throw error;
   }

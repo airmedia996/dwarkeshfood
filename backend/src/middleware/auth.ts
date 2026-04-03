@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
+import { supabase } from '../lib/supabase.js';
 import { AppError } from './errorHandler.js';
 
 export interface AuthRequest extends Request {
@@ -10,7 +10,7 @@ export interface AuthRequest extends Request {
   };
 }
 
-export const authenticateToken = (
+export const authenticateToken = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
@@ -22,8 +22,23 @@ export const authenticateToken = (
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
-    req.user = decoded;
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      throw new AppError('Invalid or expired token', 401);
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+    req.user = {
+      id: user.id,
+      email: user.email || '',
+      role: profile?.role || 'customer'
+    };
     next();
   } catch (error) {
     throw new AppError('Invalid or expired token', 401);

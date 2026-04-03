@@ -1,15 +1,29 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Request, Response } from 'express';
-import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
-import { prisma } from '../index.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { z } from 'zod';
+
+let supabaseAdmin: SupabaseClient | null = null;
+
+const getSupabaseAdmin = () => {
+  if (!supabaseAdmin) {
+    const supabaseUrl = process.env.SUPABASE_URL!;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+    supabaseAdmin = createClient(supabaseUrl, serviceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+  }
+  return supabaseAdmin;
+};
 
 const registerSchema = z.object({
   name: z.string().min(2),
   email: z.string().email(),
-  phone: z.string().min(10),
   password: z.string().min(6),
+  phone: z.string().min(10).optional(),
   role: z.enum(['customer', 'admin']).default('customer')
 });
 
@@ -22,40 +36,49 @@ export const register = async (req: Request, res: Response) => {
   try {
     const data = registerSchema.parse(req.body);
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email: data.email }
-    });
-
-    if (existingUser) {
-      throw new AppError('Email already registered', 400);
-    }
-
-    const hashedPassword = await bcrypt.hash(data.password, 10);
-
-    const user = await prisma.user.create({
-      data: {
-        name: data.name,
-        email: data.email,
-        phone: data.phone,
-        password: hashedPassword,
-        role: data.role
+    const { data: authData, error: authError } = await getSupabaseAdmin().auth.signUp({
+      email: data.email,
+      password: data.password,
+      options: {
+        data: {
+          name: data.name,
+          phone: data.phone || '',
+          role: data.role
+        }
       }
     });
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: process.env.JWT_EXPIRE || '15m' }
-    );
+    if (authError) {
+      throw new AppError(authError.message, 400);
+    }
+
+    if (!authData.user) {
+      throw new AppError('Failed to create user', 400);
+    }
+
+    const { data: profile, error: profileError } = await getSupabaseAdmin()
+      .from('profiles')
+      .insert({
+        id: authData.user.id,
+        name: data.name,
+        phone: data.phone || '',
+        role: data.role
+      })
+      .select()
+      .single();
+
+    if (profileError) {
+      console.error('Profile creation error:', profileError);
+    }
 
     res.status(201).json({
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
+        id: authData.user.id,
+        email: authData.user.email,
+        name: data.name,
+        role: data.role
       },
-      token
+      session: authData.session
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -69,28 +92,34 @@ export const login = async (req: Request, res: Response) => {
   try {
     const data = loginSchema.parse(req.body);
 
-    const user = await prisma.user.findUnique({
-      where: { email: data.email }
+    const { data: authData, error: authError } = await getSupabaseAdmin().auth.signInWithPassword({
+      email: data.email,
+      password: data.password
     });
 
-    if (!user || !(await bcrypt.compare(data.password, user.password))) {
+    if (authError) {
       throw new AppError('Invalid email or password', 401);
     }
 
-    const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: process.env.JWT_EXPIRE || '15m' }
-    );
+    if (!authData.user) {
+      throw new AppError('Login failed', 401);
+    }
+
+    const { data: profile } = await getSupabaseAdmin()
+      .from('profiles')
+      .select('*')
+      .eq('id', authData.user.id)
+      .single();
 
     res.json({
       user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role
+        id: authData.user.id,
+        email: authData.user.email,
+        name: profile?.name || authData.user.user_metadata?.name,
+        phone: profile?.phone || authData.user.user_metadata?.phone,
+        role: profile?.role || 'customer'
       },
-      token
+      session: authData.session
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -101,7 +130,6 @@ export const login = async (req: Request, res: Response) => {
 };
 
 export const logout = async (req: Request, res: Response) => {
-  // Token-based auth doesn't require server-side logout
   res.json({ message: 'Logged out successfully' });
 };
 
@@ -113,45 +141,15 @@ export const forgotPassword = async (req: Request, res: Response) => {
       throw new AppError('Email is required', 400);
     }
 
-    const user = await prisma.user.findUnique({
-      where: { email }
+    const { error } = await getSupabaseAdmin().auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.FRONTEND_URL}/reset-password`
     });
 
-    if (!user) {
-      // Don't reveal if email exists
-      res.json({ message: 'If the email exists, a reset link will be sent' });
-      return;
+    if (error && error.message !== 'User not found') {
+      throw new AppError(error.message, 400);
     }
 
-    // Generate reset token (expires in 1 hour)
-    const resetToken = jwt.sign(
-      { id: user.id, type: 'password-reset' },
-      process.env.JWT_SECRET || 'secret',
-      { expiresIn: '1h' }
-    );
-
-    // Store reset token in user (or create a separate table for tokens)
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { 
-        // In production, store a hashed token. Here we rely on JWT
-      }
-    });
-
-    // In production, send email with reset link
-    // For now, return the token (in production, send via email)
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/reset-password?token=${resetToken}`;
-    
-    console.log(`Password Reset URL: ${resetUrl}`);
-    
-    // In production, you would use nodemailer to send email:
-    // await sendEmail({ to: email, subject: 'Password Reset', text: `Reset your password at: ${resetUrl}` });
-
-    res.json({ 
-      message: 'If the email exists, a reset link will be sent',
-      // Remove this in production
-      resetToken 
-    });
+    res.json({ message: 'If the email exists, a reset link will be sent' });
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new AppError('Invalid input', 400);
@@ -172,30 +170,55 @@ export const resetPassword = async (req: Request, res: Response) => {
       throw new AppError('Password must be at least 6 characters', 400);
     }
 
-    // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as any;
-
-    if (decoded.type !== 'password-reset') {
-      throw new AppError('Invalid token', 400);
-    }
-
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Update password
-    await prisma.user.update({
-      where: { id: decoded.id },
-      data: { password: hashedPassword }
+    const { error } = await getSupabaseAdmin().auth.verifyOtp({
+      email: '',
+      token,
+      type: 'recovery'
     });
+
+    if (error) {
+      throw new AppError('Invalid or expired token', 400);
+    }
 
     res.json({ message: 'Password reset successful' });
   } catch (error: any) {
-    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-      throw new AppError('Invalid or expired token', 400);
-    }
     if (error instanceof z.ZodError) {
       throw new AppError('Invalid input', 400);
     }
+    throw error;
+  }
+};
+
+export const getCurrentUser = async (req: Request, res: Response) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      throw new AppError('No token provided', 401);
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error } = await getSupabaseAdmin().auth.getUser(token);
+
+    if (error || !user) {
+      throw new AppError('Invalid token', 401);
+    }
+
+    const { data: profile } = await getSupabaseAdmin()
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
+
+    res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: profile?.name || user.user_metadata?.name,
+        phone: profile?.phone || user.user_metadata?.phone,
+        role: profile?.role || 'customer'
+      }
+    });
+  } catch (error) {
     throw error;
   }
 };

@@ -3,7 +3,8 @@ import { useSelector } from 'react-redux'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { RootState } from '../store/index'
-import { usersAPI, api } from '../services/api'
+import { usersAPI } from '../services/api'
+import api from '../services/api'
 
 const Profile: React.FC = () => {
   const navigate = useNavigate()

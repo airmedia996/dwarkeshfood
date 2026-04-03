@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { ordersAPI } from '../services/api'
 import { useDispatch } from 'react-redux'
 import { addToCart } from '../store/slices/cartSlice'
